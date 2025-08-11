@@ -5,71 +5,254 @@
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/5.15.4/css/all.min.css">
     <style>
       body {
-        background-color: black;
+        background-color: #0d1117;
+        color: #c9d1d9;
+        font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+        width: 380px;
+        padding: 20px;
+        margin: 0;
+      }
+
+      h1 {
+        font-size: 18px;
+        margin-bottom: 5px;
+        color: #58a6ff;
+      }
+
+      .version {
+        font-size: 12px;
+        color: #8b949e;
+        margin-bottom: 20px;
+      }
+
+      .status-section {
+        background-color: #161b22;
+        border: 1px solid #30363d;
+        border-radius: 6px;
+        padding: 12px;
+        margin-bottom: 15px;
+      }
+
+      .status-indicator {
+        display: flex;
+        align-items: center;
+        margin-bottom: 8px;
+      }
+
+      .status-dot {
+        width: 8px;
+        height: 8px;
+        border-radius: 50%;
+        margin-right: 8px;
+      }
+
+      .status-dot.active {
+        background-color: #3fb950;
+      }
+
+      .status-dot.inactive {
+        background-color: #f85149;
+      }
+
+      .export-options {
+        background-color: #161b22;
+        border: 1px solid #30363d;
+        border-radius: 6px;
+        padding: 12px;
+        margin-bottom: 15px;
+      }
+
+      .export-format {
+        display: flex;
+        gap: 10px;
+        margin-bottom: 10px;
+      }
+
+      .checkbox-group {
+        display: flex;
+        flex-direction: column;
+        gap: 8px;
+        margin-top: 10px;
+      }
+
+      .checkbox-group label {
+        display: flex;
+        align-items: center;
+        font-size: 14px;
+      }
+
+      .checkbox-group input[type="checkbox"] {
+        margin-right: 8px;
+      }
+
+      .button {
+        background-color: #238636;
         color: white;
-        font-family: 'Courier New', monospace;
+        padding: 10px 20px;
+        border: none;
+        border-radius: 6px;
+        cursor: pointer;
+        width: 100%;
+        font-size: 14px;
+        font-weight: 600;
+        transition: background-color 0.2s;
+      }
+
+      .button:hover:not(:disabled) {
+        background-color: #2ea043;
+      }
+
+      .button:disabled {
+        background-color: #21262d;
+        color: #8b949e;
+        cursor: not-allowed;
+      }
+
+      .button.secondary {
+        background-color: #21262d;
+        border: 1px solid #30363d;
+        margin-top: 10px;
+      }
+
+      .button.secondary:hover:not(:disabled) {
+        background-color: #30363d;
       }
 
       #message {
         padding: 10px;
-        margin-bottom: 10px;
+        margin: 10px 0;
+        border-radius: 6px;
         display: none;
+        font-size: 14px;
       }
 
       #success {
-        background-color: #28a745;
+        background-color: #1f6e3c;
+        border: 1px solid #3fb950;
+        color: #3fb950;
       }
 
       #error {
-        background-color: #dc3545;
+        background-color: #5d1f1f;
+        border: 1px solid #f85149;
+        color: #f85149;
       }
 
-      .button {
-        background-color: #007bff;
-        color: white;
-        padding: 10px 20px;
-        border: none;
-        border-radius: 5px;
+      #warning {
+        background-color: #5d4e1f;
+        border: 1px solid #d29922;
+        color: #d29922;
+      }
+
+      .format-radio {
+        display: flex;
+        gap: 15px;
+      }
+
+      .format-radio label {
+        display: flex;
+        align-items: center;
         cursor: pointer;
-        margin-bottom: 10px;
       }
 
-      .button:hover {
-        background-color: #0056b3;
+      .format-radio input[type="radio"] {
+        margin-right: 5px;
       }
 
-      #scrapeButton {
-        background-color: #dc3545;
-      }
-
-      #scrapeButton:hover {
-        background-color: #c82333;
+      .info-text {
+        font-size: 12px;
+        color: #8b949e;
+        margin-top: 15px;
+        padding: 10px;
+        background-color: #0d1117;
+        border-left: 3px solid #58a6ff;
       }
 
       .social-icons {
         display: flex;
         justify-content: center;
         margin-top: 20px;
+        padding-top: 15px;
+        border-top: 1px solid #30363d;
       }
 
       .social-icons a {
         display: inline-block;
-        margin-right: 10px;
-        color: white;
-        font-size: 24px;
+        margin: 0 10px;
+        color: #8b949e;
+        font-size: 20px;
         text-decoration: none;
+        transition: color 0.2s;
+      }
+
+      .social-icons a:hover {
+        color: #58a6ff;
+      }
+
+      .stats {
+        font-size: 12px;
+        color: #8b949e;
+        margin-top: 5px;
       }
     </style>
-    <script src="popup.js"></script>
   </head>
   <body>
-    <button id="scrapeButton" class="button">Scrape Data</button>
+    <h1>DO Audit Log Scraper</h1>
+    <div class="version">Version 2.0 - Forensic Edition</div>
+
+    <div class="status-section">
+      <div class="status-indicator">
+        <span class="status-dot" id="statusDot"></span>
+        <span id="statusText">Checking page...</span>
+      </div>
+      <div class="stats" id="stats"></div>
+    </div>
+
+    <div class="export-options">
+      <label style="font-weight: 600; margin-bottom: 8px; display: block;">Export Format:</label>
+      <div class="format-radio">
+        <label>
+          <input type="radio" name="format" value="csv" checked>
+          CSV
+        </label>
+        <label>
+          <input type="radio" name="format" value="json">
+          JSON
+        </label>
+      </div>
+      
+      <div class="checkbox-group">
+        <label>
+          <input type="checkbox" id="includeMetadata" checked>
+          Include forensic metadata
+        </label>
+        <label>
+          <input type="checkbox" id="includeHash" checked>
+          Generate SHA-256 hash
+        </label>
+        <label>
+          <input type="checkbox" id="timestampFilename" checked>
+          Add timestamp to filename
+        </label>
+      </div>
+    </div>
+
+    <button id="scrapeButton" class="button" disabled>Scrape Audit Logs</button>
+    <button id="scrapeAllButton" class="button secondary" disabled>Scrape All Pages</button>
+    
     <div id="message"></div>
-    <p>Under Attack? Contact us &darr;</p>
+    
+    <div class="info-text">
+      <strong>Note:</strong> DigitalOcean still lacks API support for audit log export (as of 2025). This tool fills that gap for forensic investigations and compliance requirements.
+    </div>
+
+    <p style="text-align: center; margin-top: 15px; font-size: 13px;">Need forensic assistance?</p>
     <div class="social-icons">
       <a href="https://twitter.com/ionsec_io" class="fab fa-twitter" target="_blank"></a>
       <a href="https://www.linkedin.com/company/ionsec" class="fab fa-linkedin" target="_blank"></a>
-      <a href="https://ionsec.io/panicmode/" class="fab fa-chrome" target="_blank"></a>
+      <a href="https://ionsec.io" class="fab fa-globe" target="_blank"></a>
     </div>
+    
+    <script src="popup.js"></script>
   </body>
 </html>
