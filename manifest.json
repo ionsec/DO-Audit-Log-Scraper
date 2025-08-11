@@ -1,20 +1,41 @@
 {
-  "manifest_version": 2,
+  "manifest_version": 3,
   "name": "DO Audit Log Scraper",
-  "version": "1.0",
-  "permissions": ["activeTab", "downloads"],
+  "version": "2.0",
+  "description": "Scrape and export DigitalOcean audit logs for forensic analysis and DFIR purposes",
+  "permissions": [
+    "activeTab",
+    "downloads",
+    "storage",
+    "scripting"
+  ],
+  "host_permissions": [
+    "https://cloud.digitalocean.com/*"
+  ],
   "content_scripts": [
     {
-      "matches": ["*://*/*"],
-      "js": ["contentScript.js"]
+      "matches": ["https://cloud.digitalocean.com/account/security*"],
+      "js": ["contentScript.js"],
+      "run_at": "document_end"
     }
   ],
-  "browser_action": {
+  "action": {
     "default_popup": "popup.html",
     "default_icon": {
       "16": "icons/icon16.png",
       "48": "icons/icon48.png",
       "128": "icons/icon128.png"
     }
+  },
+  "background": {
+    "service_worker": "background.js"
+  },
+  "content_security_policy": {
+    "extension_pages": "script-src 'self'; object-src 'none'"
+  },
+  "icons": {
+    "16": "icons/icon16.png",
+    "48": "icons/icon48.png",
+    "128": "icons/icon128.png"
   }
 }
