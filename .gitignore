@@ -1,0 +1,27 @@
+# Dependencies
+node_modules/
+
+# Build output
+docs/_build/
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Editor artifacts
+*.swp
+*.swo
+*~
+
+# Extension package
+*.crx
+*.zip
+*.pem
+.key
+
+# IDE
+.idea/
+.vscode/
+
+# Claude settings (local only)
+.claude/
