@@ -1,0 +1,35 @@
+{
+  "name": "do-audit-log-scraper",
+  "version": "2.1.0",
+  "description": "Chrome extension to scrape and export DigitalOcean audit logs for forensic analysis",
+  "private": true,
+  "scripts": {
+    "lint": "eslint *.js",
+    "lint:fix": "eslint *.js --fix",
+    "format": "prettier --write '*.js' '*.html' 'docs/source/*.rst'",
+    "format:check": "prettier --check '*.js' '*.html'",
+    "docs": "cd docs && sphinx-build -b html source _build/html",
+    "docs:clean": "rm -rf docs/_build"
+  },
+  "devDependencies": {
+    "eslint": "^9.0.0",
+    "eslint-config-standard": "^17.1.0",
+    "eslint-plugin-import": "^2.29.0",
+    "eslint-plugin-n": "^17.0.0",
+    "eslint-plugin-promise": "^6.1.0",
+    "prettier": "^3.2.0"
+  },
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/your-repo/DO-Audit-Log-Scraper.git"
+  },
+  "keywords": [
+    "digitalocean",
+    "audit-log",
+    "dfir",
+    "forensics",
+    "chrome-extension",
+    "scraper"
+  ]
+}

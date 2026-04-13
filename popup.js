@@ -1,136 +1,248 @@
-// Popup script for Manifest V3
-document.addEventListener("DOMContentLoaded", async function () {
+// Popup script for DO Audit Log Scraper v2.1 — Manifest V3
+
+document.addEventListener("DOMContentLoaded", async () => {
   const scrapeButton = document.getElementById("scrapeButton");
   const scrapeAllButton = document.getElementById("scrapeAllButton");
+  const copyButton = document.getElementById("copyButton");
+  const filteredButton = document.getElementById("filteredButton");
   const messageDiv = document.getElementById("message");
   const statusDot = document.getElementById("statusDot");
   const statusText = document.getElementById("statusText");
   const statsDiv = document.getElementById("stats");
+  const monitorToggle = document.getElementById("monitorToggle");
+  const monitorStatus = document.getElementById("monitorStatus");
 
-  // Check if we're on the correct page
-  const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-  
-  if (tab && tab.url && tab.url.includes("cloud.digitalocean.com/account/security")) {
-    statusDot.classList.add("active");
-    statusText.textContent = "Ready to scrape";
-    scrapeButton.disabled = false;
-    scrapeAllButton.disabled = false;
-    
-    // Try to get page stats
-    try {
-      const [result] = await chrome.tabs.sendMessage(tab.id, { 
-        message: "get_stats" 
-      }).catch(err => {
+  // ─── Load saved options from storage ──────────────────────────────────
+  try {
+    const stored = await chrome.storage.local.get("exportOptions");
+    if (stored.exportOptions) {
+      const opts = stored.exportOptions;
+      if (opts.format) {
+        const radio = document.querySelector(`input[name="format"][value="${opts.format}"]`);
+        if (radio) radio.checked = true;
+      }
+      if (opts.includeMetadata !== undefined) document.getElementById("includeMetadata").checked = opts.includeMetadata;
+      if (opts.includeHash !== undefined) document.getElementById("includeHash").checked = opts.includeHash;
+      if (opts.timestampFilename !== undefined) document.getElementById("timestampFilename").checked = opts.timestampFilename;
+    }
+  } catch (err) {
+    console.log("Could not load stored options:", err);
+  }
+
+  // ─── Page status check ────────────────────────────────────────────────
+  let currentTabId = null;
+  let isOnCorrectPage = false;
+
+  async function checkPage() {
+    const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+    if (!tab || !tab.url) return;
+
+    currentTabId = tab.id;
+    isOnCorrectPage = tab.url.includes("cloud.digitalocean.com/account/security");
+
+    if (isOnCorrectPage) {
+      statusDot.className = "status-dot active";
+      statusText.textContent = "Ready to scrape";
+      scrapeButton.disabled = false;
+      scrapeAllButton.disabled = false;
+      copyButton.disabled = false;
+      filteredButton.disabled = false;
+
+      try {
+        const result = await chrome.tabs.sendMessage(tab.id, { message: "get_stats" });
+        if (result && result.rowCount !== undefined) {
+          statsDiv.textContent = `Found ${result.rowCount} audit log entries on current page`;
+          if (result.hasNextPage) {
+            statsDiv.textContent += " (more pages available)";
+          }
+        }
+      } catch {
         console.log("Content script not ready yet");
-        return [null];
-      });
-      
-      if (result && result.rowCount !== undefined) {
-        statsDiv.textContent = `Found ${result.rowCount} audit log entries on current page`;
       }
-    } catch (err) {
-      console.log("Could not get stats:", err);
+    } else {
+      statusDot.className = "status-dot inactive";
+      statusText.textContent = "Navigate to DigitalOcean Security page";
+      scrapeButton.disabled = true;
+      scrapeAllButton.disabled = true;
+      copyButton.disabled = true;
+      filteredButton.disabled = true;
+      showMessage("Please open the DigitalOcean Security page first", "warning");
     }
-  } else {
-    statusDot.classList.add("inactive");
-    statusText.textContent = "Please navigate to DigitalOcean Security page";
-    showWarning("Please open the DigitalOcean Security page first");
   }
 
-  // Scrape current page
-  scrapeButton.addEventListener("click", async function () {
-    const format = document.querySelector('input[name="format"]:checked').value;
-    const includeMetadata = document.getElementById("includeMetadata").checked;
-    const includeHash = document.getElementById("includeHash").checked;
-    const timestampFilename = document.getElementById("timestampFilename").checked;
+  await checkPage();
 
+  // ─── Helper: collect current options ─────────────────────────────────
+  function getOptions() {
+    return {
+      format: document.querySelector('input[name="format"]:checked').value,
+      includeMetadata: document.getElementById("includeMetadata").checked,
+      includeHash: document.getElementById("includeHash").checked,
+      timestampFilename: document.getElementById("timestampFilename").checked,
+    };
+  }
+
+  // ─── Save options to storage on change ─────────────────────────────────
+  async function saveOptions() {
+    const options = getOptions();
+    await chrome.storage.local.set({ exportOptions: options });
+  }
+
+  document.querySelectorAll('input[name="format"]').forEach((radio) =>
+    radio.addEventListener("change", saveOptions)
+  );
+  ["includeMetadata", "includeHash", "timestampFilename"].forEach((id) =>
+    document.getElementById(id).addEventListener("change", saveOptions)
+  );
+
+  // ─── Get filter values ────────────────────────────────────────────────
+  function getFilters() {
+    return {
+      User: document.getElementById("filterUser").value.trim(),
+      Action: document.getElementById("filterAction").value.trim(),
+      "IP Address": document.getElementById("filterIP").value.trim(),
+    };
+  }
+
+  function hasActiveFilters() {
+    const filters = getFilters();
+    return Object.values(filters).some((v) => v.length > 0);
+  }
+
+  // ─── Scrape current page ──────────────────────────────────────────────
+  scrapeButton.addEventListener("click", async () => {
+    if (!currentTabId) return;
     try {
-      const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-      
-      const response = await chrome.tabs.sendMessage(tab.id, { 
+      const response = await chrome.tabs.sendMessage(currentTabId, {
         message: "scrape_data",
-        options: {
-          format,
-          includeMetadata,
-          includeHash,
-          timestampFilename,
-          allPages: false
-        }
+        options: { ...getOptions(), allPages: false },
       });
-
       if (response && response.success) {
-        showSuccess(`Successfully scraped ${response.count} audit log entries!`);
+        showMessage(`Scraped ${response.count} audit log entries!`, "success");
       } else {
-        showError("Failed to scrape data. Please check the console for details.");
+        showMessage("Failed to scrape data. Check the console.", "error");
       }
     } catch (error) {
-      console.error("Error:", error);
-      showError("Error: " + error.message);
+      showMessage("Error: " + error.message, "error");
     }
   });
 
-  // Scrape all pages (with pagination)
-  scrapeAllButton.addEventListener("click", async function () {
-    const format = document.querySelector('input[name="format"]:checked').value;
-    const includeMetadata = document.getElementById("includeMetadata").checked;
-    const includeHash = document.getElementById("includeHash").checked;
-    const timestampFilename = document.getElementById("timestampFilename").checked;
-
+  // ─── Scrape all pages ─────────────────────────────────────────────────
+  scrapeAllButton.addEventListener("click", async () => {
+    if (!currentTabId) return;
+    showMessage("Scraping all pages… This may take a moment.", "info");
     try {
-      const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-      
-      showInfo("Scraping all pages... This may take a moment.");
-      
-      const response = await chrome.tabs.sendMessage(tab.id, { 
+      const response = await chrome.tabs.sendMessage(currentTabId, {
         message: "scrape_data",
-        options: {
-          format,
-          includeMetadata,
-          includeHash,
-          timestampFilename,
-          allPages: true
-        }
+        options: { ...getOptions(), allPages: true },
       });
-
       if (response && response.success) {
-        showSuccess(`Successfully scraped ${response.count} total entries from ${response.pages} page(s)!`);
+        showMessage(
+          `Scraped ${response.count} entries from ${response.pages} page(s)!`,
+          "success"
+        );
       } else {
-        showError("Failed to scrape all pages. Please check the console for details.");
+        showMessage("Failed to scrape all pages.", "error");
       }
     } catch (error) {
-      console.error("Error:", error);
-      showError("Error: " + error.message);
+      showMessage("Error: " + error.message, "error");
     }
   });
 
-  // Show success message
-  function showSuccess(message) {
-    messageDiv.textContent = message;
-    messageDiv.style.display = "block";
-    messageDiv.id = "success";
-    setTimeout(() => {
-      messageDiv.style.display = "none";
-    }, 5000);
-  }
+  // ─── Copy to clipboard ────────────────────────────────────────────────
+  copyButton.addEventListener("click", async () => {
+    if (!currentTabId) return;
+    try {
+      const response = await chrome.tabs.sendMessage(currentTabId, {
+        message: "copy_data",
+      });
+      if (response && response.success) {
+        showMessage(`Copied ${response.count} entries to clipboard!`, "success");
+      } else {
+        showMessage("Failed to copy.", "error");
+      }
+    } catch (error) {
+      showMessage("Error: " + error.message, "error");
+    }
+  });
 
-  // Show error message
-  function showError(message) {
-    messageDiv.textContent = message;
-    messageDiv.style.display = "block";
-    messageDiv.id = "error";
-  }
+  // ─── Export filtered ───────────────────────────────────────────────────
+  filteredButton.addEventListener("click", async () => {
+    if (!currentTabId) return;
+    const filters = getFilters();
+    if (!hasActiveFilters()) {
+      showMessage("Set at least one filter first.", "warning");
+      return;
+    }
+    try {
+      const response = await chrome.tabs.sendMessage(currentTabId, {
+        message: "filter_data",
+        filters,
+      });
+      if (response && response.success) {
+        // Download the filtered CSV
+        const options = getOptions();
+        const filename = `do_audit_logs_filtered.${options.format}`;
+        const blob = new Blob([response.csv], { type: "text/csv;charset=utf-8" });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement("a");
+        a.href = url;
+        a.download = filename;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        URL.revokeObjectURL(url);
+        showMessage(`Exported ${response.count} filtered entries!`, "success");
+      } else {
+        showMessage("Failed to filter data.", "error");
+      }
+    } catch (error) {
+      showMessage("Error: " + error.message, "error");
+    }
+  });
 
-  // Show warning message
-  function showWarning(message) {
-    messageDiv.textContent = message;
-    messageDiv.style.display = "block";
-    messageDiv.id = "warning";
-  }
+  // ─── Real-time monitoring toggle ──────────────────────────────────────
+  monitorToggle.addEventListener("change", async () => {
+    if (!currentTabId) return;
+    const enabled = monitorToggle.checked;
+    try {
+      await chrome.tabs.sendMessage(currentTabId, {
+        message: enabled ? "start_monitoring" : "stop_monitoring",
+      });
+      if (enabled) {
+        statusDot.className = "status-dot monitoring";
+        monitorStatus.textContent = "Monitoring for new entries…";
+      } else {
+        statusDot.className = "status-dot active";
+        monitorStatus.textContent = "";
+      }
+    } catch {
+      showMessage("Could not toggle monitoring.", "error");
+    }
+  });
 
-  // Show info message
-  function showInfo(message) {
-    messageDiv.textContent = message;
+  // ─── Listen for new-entry notifications from background ───────────────
+  chrome.runtime.onMessage.addListener((request) => {
+    if (request.action === "newEntriesNotification") {
+      showMessage(
+        `${request.count} new audit log entry detected!`,
+        "info"
+      );
+    }
+  });
+
+  // ─── Message display (fixed: uses class instead of mutating id) ──────
+  let messageTimeout = null;
+
+  function showMessage(text, type = "info") {
+    if (messageTimeout) clearTimeout(messageTimeout);
+    messageDiv.textContent = text;
+    messageDiv.className = `message ${type}`;
     messageDiv.style.display = "block";
-    messageDiv.id = "success";
+    if (type !== "error") {
+      messageTimeout = setTimeout(() => {
+        messageDiv.style.display = "none";
+      }, 5000);
+    }
   }
 });

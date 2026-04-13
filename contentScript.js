@@ -1,17 +1,40 @@
-// Enhanced content script for DO Audit Log Scraper v2.0
-// Includes forensic features, error handling, and multi-format export
+// DO Audit Log Scraper v2.1 — Forensic Edition
+// Rewritten: bug fixes, CSV injection protection, pagination via messaging,
+// MutationObserver monitoring, search/filter, clipboard, storage persistence
 
-// Generate SHA-256 hash for data integrity
+const EXT_VERSION = "2.1";
+const DO_SECURITY_ORIGIN = "https://cloud.digitalocean.com";
+
+// ─── SHA-256 Hash ────────────────────────────────────────────────────────
 async function generateSHA256(data) {
   const encoder = new TextEncoder();
   const dataBuffer = encoder.encode(data);
-  const hashBuffer = await crypto.subtle.digest('SHA-256', dataBuffer);
-  const hashArray = Array.from(new Uint8Array(hashBuffer));
-  const hashHex = hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
-  return hashHex;
+  const hashBuffer = await crypto.subtle.digest("SHA-256", dataBuffer);
+  return Array.from(new Uint8Array(hashBuffer))
+    .map((b) => b.toString(16).padStart(2, "0"))
+    .join("");
 }
 
-// Extract audit log data from the current page
+// ─── CSV Sanitisation (formula-injection protection) ────────────────────
+function sanitiseCSVCell(value) {
+  if (value === null || value === undefined) return "";
+  const str = String(value);
+  // Prevent CSV formula injection: prefix dangerous chars with a tab
+  if (/^[=+\-@\t\r]/.test(str)) {
+    return "\t" + str;
+  }
+  return str;
+}
+
+function escapeCSV(value) {
+  const str = sanitiseCSVCell(value);
+  if (str.includes(",") || str.includes('"') || str.includes("\n")) {
+    return '"' + str.replace(/"/g, '""') + '"';
+  }
+  return str;
+}
+
+// ─── Data Extraction ────────────────────────────────────────────────────
 function extractAuditLogData() {
   try {
     const table = document.querySelector("table");
@@ -20,119 +43,128 @@ function extractAuditLogData() {
       return null;
     }
 
-    // Extract headers
     const headerRow = table.querySelector("thead tr");
     if (!headerRow) {
       console.error("No header row found in table");
       return null;
     }
 
-    const headerCells = Array.from(headerRow.querySelectorAll("th"));
-    const headers = headerCells.map((cell) => cell.textContent.trim());
-
-    // Add forensic headers
+    const headers = Array.from(headerRow.querySelectorAll("th")).map((cell) =>
+      cell.textContent.trim()
+    );
     headers.push("UTC_Timestamp", "Local_Timestamp", "Scraped_At_UTC");
 
-    // Extract data rows
     const dataRows = Array.from(table.querySelectorAll("tbody tr"));
-    
     if (dataRows.length === 0) {
       console.warn("No audit log entries found");
       return { headers, data: [], count: 0 };
     }
 
-    const extractedData = dataRows.map((row) => {
-      try {
-        const cells = Array.from(row.querySelectorAll("td"));
-        const rowData = cells.map((cell) => {
-          // Check for nested elements like links
-          const link = cell.querySelector("a");
-          if (link) {
-            return link.textContent.trim() || "N/A";
-          }
-          const content = cell.textContent.trim();
-          return content === "" ? "N/A" : content;
-        });
+    const scrapedAt = new Date().toISOString();
 
-        // Extract timestamp data
-        const timeElement = row.querySelector(".created_at time, time");
-        const dateTime = timeElement ? timeElement.getAttribute("datetime") : "N/A";
-        
-        // Try to get tooltip for local time
-        const tooltipElement = row.querySelector("[data-original-title], [title]");
-        const localTime = tooltipElement ? 
-          (tooltipElement.getAttribute("data-original-title") || tooltipElement.getAttribute("title") || "N/A") : 
-          "N/A";
+    const data = dataRows
+      .map((row) => {
+        try {
+          const cells = Array.from(row.querySelectorAll("td"));
+          const rowData = cells.map((cell) => {
+            const link = cell.querySelector("a");
+            if (link) return link.textContent.trim() || "N/A";
+            const content = cell.textContent.trim();
+            return content === "" ? "N/A" : content;
+          });
 
-        // Add forensic timestamp
-        const scrapedAt = new Date().toISOString();
+          const timeElement = row.querySelector(".created_at time, time");
+          const dateTime = timeElement
+            ? timeElement.getAttribute("datetime")
+            : "N/A";
 
-        rowData.push(dateTime);
-        rowData.push(localTime);
-        rowData.push(scrapedAt);
+          const tooltipElement = row.querySelector(
+            "[data-original-title], [title]"
+          );
+          const localTime = tooltipElement
+            ? tooltipElement.getAttribute("data-original-title") ||
+              tooltipElement.getAttribute("title") ||
+              "N/A"
+            : "N/A";
 
-        return rowData;
-      } catch (err) {
-        console.error("Error extracting row data:", err);
-        return null;
-      }
-    }).filter(row => row !== null);
+          rowData.push(dateTime);
+          rowData.push(localTime);
+          rowData.push(scrapedAt);
+          return rowData;
+        } catch (err) {
+          console.error("Error extracting row data:", err);
+          return null;
+        }
+      })
+      .filter((row) => row !== null);
 
-    return {
-      headers,
-      data: extractedData,
-      count: extractedData.length
-    };
+    return { headers, data, count: data.length };
   } catch (error) {
     console.error("Error in extractAuditLogData:", error);
     return null;
   }
 }
 
-// Check for pagination and get next page URL
+// ─── Pagination (fixed: uses chrome messaging instead of page navigation) ─
 function getNextPageUrl() {
-  const nextButton = document.querySelector("a[rel='next'], .pagination a:contains('Next'), .pagination .next a");
-  if (nextButton && !nextButton.classList.contains("disabled")) {
-    return nextButton.href;
+  // Fixed: removed invalid jQuery :contains() pseudo-selector
+  const selectors = [
+    "a[rel='next']",
+    ".pagination .next a",
+    ".pagination .next:not(.disabled) a",
+    'button[aria-label="Next"]',
+  ];
+  for (const selector of selectors) {
+    try {
+      const el = document.querySelector(selector);
+      if (el && !el.classList.contains("disabled") && el.href) {
+        // Validate URL is on the same origin
+        try {
+          const url = new URL(el.href, DO_SECURITY_ORIGIN);
+          if (url.origin === DO_SECURITY_ORIGIN) {
+            return url.href;
+          }
+        } catch {
+          continue;
+        }
+      }
+    } catch {
+      // Selector may not match anything — continue
+    }
   }
+
+  // Fallback: look for text-based "Next" links
+  const links = document.querySelectorAll(".pagination a, nav a");
+  for (const link of links) {
+    if (
+      link.textContent.trim().toLowerCase() === "next" &&
+      !link.classList.contains("disabled") &&
+      link.href
+    ) {
+      try {
+        const url = new URL(link.href, DO_SECURITY_ORIGIN);
+        if (url.origin === DO_SECURITY_ORIGIN) return url.href;
+      } catch {
+        continue;
+      }
+    }
+  }
+
   return null;
 }
 
-// Navigate to URL and wait for load
-async function navigateToPage(url) {
-  return new Promise((resolve) => {
-    const checkInterval = setInterval(() => {
-      if (document.readyState === "complete") {
-        clearInterval(checkInterval);
-        setTimeout(resolve, 1000); // Wait a bit for dynamic content
-      }
-    }, 100);
-    window.location.href = url;
-  });
-}
-
-// Format data as CSV
+// ─── CSV Formatting ─────────────────────────────────────────────────────
 function formatAsCSV(headers, data) {
-  const escapeCSV = (value) => {
-    if (value === null || value === undefined) return "";
-    const str = String(value);
-    if (str.includes(",") || str.includes('"') || str.includes("\n")) {
-      return '"' + str.replace(/"/g, '""') + '"';
-    }
-    return str;
-  };
-
   const csvHeaders = headers.map(escapeCSV).join(",");
-  const csvRows = data.map(row => row.map(escapeCSV).join(","));
-  
+  const csvRows = data.map((row) => row.map(escapeCSV).join(","));
   return [csvHeaders, ...csvRows].join("\n");
 }
 
-// Create forensic metadata
+// ─── Forensic Metadata ─────────────────────────────────────────────────
 async function createForensicMetadata(data, options) {
   const metadata = {
     tool: "DO Audit Log Scraper",
-    version: "2.0",
+    version: EXT_VERSION,
     exportedAt: new Date().toISOString(),
     exportedBy: "IONSEC Forensic Tools",
     source: "DigitalOcean Security Audit Logs",
@@ -141,196 +173,353 @@ async function createForensicMetadata(data, options) {
     browserInfo: {
       userAgent: navigator.userAgent,
       platform: navigator.platform,
-      language: navigator.language
+      language: navigator.language,
     },
-    options: options
+    options: {
+      format: options.format,
+      includeMetadata: options.includeMetadata,
+      includeHash: options.includeHash,
+      timestampFilename: options.timestampFilename,
+      allPages: options.allPages,
+    },
   };
 
   if (options.includeHash) {
     const dataString = JSON.stringify(data);
     metadata.dataHash = {
       algorithm: "SHA-256",
-      value: await generateSHA256(dataString)
+      value: await generateSHA256(dataString),
     };
   }
 
   return metadata;
 }
 
-// Generate filename with timestamp
+// ─── Filename Generation ────────────────────────────────────────────────
 function generateFilename(format, includeTimestamp) {
-  const timestamp = includeTimestamp ? 
-    `_${new Date().toISOString().replace(/[:.]/g, '-').slice(0, -5)}` : '';
+  const timestamp = includeTimestamp
+    ? `_${new Date().toISOString().replace(/[:.]/g, "-").slice(0, -5)}`
+    : "";
   return `do_audit_logs${timestamp}.${format}`;
 }
 
-// Download data
+// ─── Download ───────────────────────────────────────────────────────────
 async function downloadData(data, filename, format) {
   let content;
   let mimeType;
 
-  if (format === 'json') {
+  if (format === "json") {
     content = JSON.stringify(data, null, 2);
-    mimeType = 'application/json';
+    mimeType = "application/json";
   } else {
     content = data;
-    mimeType = 'text/csv;charset=utf-8';
+    mimeType = "text/csv;charset=utf-8";
   }
 
-  // Create blob and download
   const blob = new Blob([content], { type: mimeType });
   const url = URL.createObjectURL(blob);
-  
+
   const downloadLink = document.createElement("a");
   downloadLink.href = url;
   downloadLink.download = filename;
+  document.body.appendChild(downloadLink);
   downloadLink.click();
-  
-  // Clean up
+  document.body.removeChild(downloadLink);
+
   setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
 
-// Main scraping function
+// ─── Pagination via background messaging (replaces broken navigateToPage) ─
+// Instead of navigating the content script page (which destroys the context),
+// we ask the background worker to create a new temporary tab, inject the
+// content script there, scrape, and return data.
+
+async function scrapeAllPages(options, firstPageData) {
+  let nextUrl = getNextPageUrl();
+  if (!nextUrl) {
+    return { data: firstPageData.data, headers: firstPageData.headers, pages: 1 };
+  }
+
+  let allData = [...firstPageData.data];
+  const headers = firstPageData.headers;
+  let pages = 1;
+  let currentUrl = nextUrl;
+
+  while (currentUrl) {
+    pages++;
+    // Ask background to open the URL in a hidden tab, inject script, and return data
+    const result = await chrome.runtime.sendMessage({
+      action: "scrapePageInTab",
+      url: currentUrl,
+    });
+
+    if (result && result.data && result.data.length > 0) {
+      allData.push(...result.data);
+    }
+
+    // Get next URL from the scraped page (background returns it)
+    currentUrl = result ? result.nextUrl : null;
+  }
+
+  return { data: allData, headers, pages };
+}
+
+// ─── Main Scrape Function ──────────────────────────────────────────────
 async function scrapeData(options = {}) {
   try {
     console.log("Starting audit log scrape with options:", options);
-    
-    const { format = 'csv', includeMetadata = true, includeHash = true, 
-            timestampFilename = true, allPages = false } = options;
-    
-    let allData = [];
-    let allHeaders = null;
-    let pageCount = 1;
-    let currentUrl = window.location.href;
 
-    // Extract data from current page
+    const {
+      format = "csv",
+      includeMetadata = true,
+      includeHash = true,
+      timestampFilename = true,
+      allPages = false,
+    } = options;
+
+    // Load persisted defaults for any undefined options
+    const stored = await chrome.storage.local.get("exportOptions").catch(() => ({}));
+    const defaults = stored.exportOptions || {};
+
+    const resolvedOptions = {
+      format: options.format ?? defaults.format ?? "csv",
+      includeMetadata: options.includeMetadata ?? defaults.includeMetadata ?? true,
+      includeHash: options.includeHash ?? defaults.includeHash ?? true,
+      timestampFilename: options.timestampFilename ?? defaults.timestampFilename ?? true,
+      allPages,
+    };
+
     const pageData = extractAuditLogData();
     if (!pageData) {
       throw new Error("Failed to extract audit log data");
     }
 
-    allHeaders = pageData.headers;
-    allData = [...pageData.data];
+    let allHeaders = pageData.headers;
+    let allData = pageData.data;
+    let pageCount = 1;
 
-    // Handle pagination if requested
     if (allPages) {
-      let nextUrl = getNextPageUrl();
-      
-      while (nextUrl) {
-        console.log(`Navigating to page ${++pageCount}...`);
-        await navigateToPage(nextUrl);
-        
-        const nextPageData = extractAuditLogData();
-        if (nextPageData && nextPageData.data.length > 0) {
-          allData.push(...nextPageData.data);
-        }
-        
-        nextUrl = getNextPageUrl();
-      }
-      
-      // Navigate back to original page if we moved
-      if (pageCount > 1) {
-        await navigateToPage(currentUrl);
-      }
+      const paginated = await scrapeAllPages(resolvedOptions, pageData);
+      allData = paginated.data;
+      allHeaders = paginated.headers;
+      pageCount = paginated.pages;
     }
 
-    console.log(`Scraped ${allData.length} total entries from ${pageCount} page(s)`);
+    console.log(
+      `Scraped ${allData.length} total entries from ${pageCount} page(s)`
+    );
 
-    // Prepare export data
-    let exportData;
     const filename = generateFilename(format, timestampFilename);
+    let exportData;
 
-    if (format === 'json') {
+    if (format === "json") {
       exportData = {
-        auditLogs: allData.map(row => {
+        auditLogs: allData.map((row) => {
           const obj = {};
           allHeaders.forEach((header, index) => {
             obj[header] = row[index];
           });
           return obj;
-        })
+        }),
       };
 
       if (includeMetadata) {
-        const metadata = await createForensicMetadata(exportData.auditLogs, options);
+        const metadata = await createForensicMetadata(
+          exportData.auditLogs,
+          resolvedOptions
+        );
         exportData.metadata = metadata;
       }
     } else {
-      // CSV format
       exportData = formatAsCSV(allHeaders, allData);
-      
       if (includeMetadata) {
-        const metadata = await createForensicMetadata(allData, options);
-        const metadataComment = `# Forensic Metadata: ${JSON.stringify(metadata).replace(/,/g, ';')}\n`;
-        exportData = metadataComment + exportData;
+        const metadata = await createForensicMetadata(allData, resolvedOptions);
+        // Standard CSV comment — metadata on separate lines, no embedded JSON
+        const metadataLines = [
+          "# Forensic Metadata",
+          `# Tool: ${metadata.tool} v${metadata.version}`,
+          `# Exported: ${metadata.exportedAt}`,
+          `# Source: ${metadata.source}`,
+          `# URL: ${metadata.sourceUrl}`,
+          `# Records: ${metadata.recordCount}`,
+          `# Browser: ${metadata.browserInfo.userAgent}`,
+          `# Platform: ${metadata.browserInfo.platform}`,
+          `# Language: ${metadata.browserInfo.language}`,
+        ];
+        if (metadata.dataHash) {
+          metadataLines.push(
+            `# Hash (${metadata.dataHash.algorithm}): ${metadata.dataHash.value}`
+          );
+        }
+        exportData = metadataLines.join("\n") + "\n" + exportData;
       }
     }
 
-    // Download the data
+    // Add BOM for proper UTF-8 handling in Excel
+    if (format === "csv") {
+      exportData = "\uFEFF" + exportData;
+    }
+
     await downloadData(exportData, filename, format);
 
-    return {
-      success: true,
-      count: allData.length,
-      pages: pageCount
-    };
-
+    return { success: true, count: allData.length, pages: pageCount };
   } catch (error) {
     console.error("Scraping error:", error);
-    return {
-      success: false,
-      error: error.message
-    };
+    return { success: false, error: error.message };
   }
 }
 
-// Get statistics about the current page
+// ─── Search / Filter ───────────────────────────────────────────────────
+function filterAuditLogs(data, headers, filters) {
+  if (!filters || Object.keys(filters).length === 0) return data;
+
+  return data.filter((row) => {
+    return Object.entries(filters).every(([key, value]) => {
+      const colIndex = headers.indexOf(key);
+      if (colIndex === -1) return true;
+      if (!value) return true;
+      const cellValue = String(row[colIndex]).toLowerCase();
+      return cellValue.includes(String(value).toLowerCase());
+    });
+  });
+}
+
+// ─── Clipboard Copy ────────────────────────────────────────────────────
+async function copyToClipboard(text) {
+  try {
+    await navigator.clipboard.writeText(text);
+    return true;
+  } catch {
+    // Fallback for older browsers
+    const textarea = document.createElement("textarea");
+    textarea.value = text;
+    textarea.style.position = "fixed";
+    textarea.style.left = "-9999px";
+    document.body.appendChild(textarea);
+    textarea.select();
+    const result = document.execCommand("copy");
+    document.body.removeChild(textarea);
+    return result;
+  }
+}
+
+// ─── MutationObserver — real-time monitoring ────────────────────────────
+let observer = null;
+let lastRowCount = 0;
+
+function startMonitoring() {
+  const table = document.querySelector("table tbody");
+  if (!table) return;
+
+  lastRowCount = table.querySelectorAll("tr").length;
+
+  observer = new MutationObserver((mutations) => {
+    const currentCount = table.querySelectorAll("tr").length;
+    if (currentCount > lastRowCount) {
+      const newEntries = currentCount - lastRowCount;
+      lastRowCount = currentCount;
+      chrome.runtime.sendMessage({
+        action: "newEntriesDetected",
+        count: newEntries,
+        timestamp: new Date().toISOString(),
+      });
+    }
+  });
+
+  observer.observe(table, { childList: true, subtree: true });
+}
+
+function stopMonitoring() {
+  if (observer) {
+    observer.disconnect();
+    observer = null;
+  }
+}
+
+// ─── Page Stats ────────────────────────────────────────────────────────
 function getPageStats() {
   try {
     const dataRows = document.querySelectorAll("table tbody tr");
     return {
       rowCount: dataRows.length,
-      hasNextPage: !!getNextPageUrl()
+      hasNextPage: !!getNextPageUrl(),
     };
   } catch (error) {
     console.error("Error getting page stats:", error);
-    return {
-      rowCount: 0,
-      hasNextPage: false
-    };
+    return { rowCount: 0, hasNextPage: false };
   }
 }
 
-// Listen for messages from the extension popup
+// ─── Message Handler ───────────────────────────────────────────────────
 chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
-  console.log("Content script received message:", request.message);
-  
+  console.log("Content script received message:", request.message || request.action);
+
   if (request.message === "scrape_data") {
-    scrapeData(request.options).then(result => {
-      sendResponse(result);
-    });
-    return true; // Will respond asynchronously
-  }
-  
-  if (request.message === "get_stats") {
-    const stats = getPageStats();
-    sendResponse(stats);
+    scrapeData(request.options).then(sendResponse);
     return true;
   }
-  
-  // Legacy support for old message format
-  if (request.message === "scrape_data_legacy") {
-    scrapeData({ format: 'csv' }).then(result => {
-      sendResponse({ message: result.success ? "data_scraped" : "error" });
-    });
+
+  if (request.message === "get_stats") {
+    sendResponse(getPageStats());
+    return true;
+  }
+
+  if (request.message === "copy_data") {
+    const pageData = extractAuditLogData();
+    if (pageData) {
+      const csv = formatAsCSV(pageData.headers, pageData.data);
+      copyToClipboard(csv).then((ok) => {
+        sendResponse({ success: ok, count: pageData.count });
+      });
+    } else {
+      sendResponse({ success: false, error: "No data found" });
+    }
+    return true;
+  }
+
+  if (request.message === "filter_data") {
+    const pageData = extractAuditLogData();
+    if (pageData) {
+      const filtered = filterAuditLogs(
+        pageData.data,
+        pageData.headers,
+        request.filters
+      );
+      const csv = formatAsCSV(pageData.headers, filtered);
+      sendResponse({ success: true, data: filtered, count: filtered.length, csv });
+    } else {
+      sendResponse({ success: false, error: "No data found" });
+    }
+    return true;
+  }
+
+  if (request.message === "start_monitoring") {
+    startMonitoring();
+    sendResponse({ success: true });
+    return true;
+  }
+
+  if (request.message === "stop_monitoring") {
+    stopMonitoring();
+    sendResponse({ success: true });
+    return true;
+  }
+
+  // Called from background when scraping a tab for pagination
+  if (request.message === "extract_for_pagination") {
+    const pageData = extractAuditLogData();
+    const nextUrl = getNextPageUrl();
+    sendResponse({ data: pageData ? pageData.data : [], nextUrl });
     return true;
   }
 });
 
-// Initialize - log that content script is loaded
-console.log("DO Audit Log Scraper v2.0 content script loaded");
+// ─── Init ──────────────────────────────────────────────────────────────
+console.log(`DO Audit Log Scraper v${EXT_VERSION} content script loaded`);
 
-// Periodically check if we're on the right page and report status
 if (window.location.href.includes("cloud.digitalocean.com/account/security")) {
-  console.log("Audit log page detected - extension ready");
+  console.log("Audit log page detected — extension ready");
+  // Auto-start monitoring
+  startMonitoring();
 }
+CONTENT

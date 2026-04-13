@@ -1,36 +1,61 @@
 <!DOCTYPE html>
-<html>
+<html lang="en">
   <head>
+    <meta charset="UTF-8">
     <title>DO Audit Log Scraper</title>
-    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/5.15.4/css/all.min.css">
     <style>
+      :root {
+        --bg-primary: #0d1117;
+        --bg-secondary: #161b22;
+        --border: #30363d;
+        --text-primary: #c9d1d9;
+        --text-secondary: #8b949e;
+        --accent: #58a6ff;
+        --green: #3fb950;
+        --red: #f85149;
+        --yellow: #d29922;
+        --green-bg: #1f6e3c;
+        --red-bg: #5d1f1f;
+        --yellow-bg: #5d4e1f;
+      }
+
+      * { box-sizing: border-box; }
+
       body {
-        background-color: #0d1117;
-        color: #c9d1d9;
+        background-color: var(--bg-primary);
+        color: var(--text-primary);
         font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
-        width: 380px;
+        width: 400px;
         padding: 20px;
         margin: 0;
       }
 
       h1 {
         font-size: 18px;
-        margin-bottom: 5px;
-        color: #58a6ff;
+        margin: 0 0 5px;
+        color: var(--accent);
       }
 
       .version {
         font-size: 12px;
-        color: #8b949e;
+        color: var(--text-secondary);
         margin-bottom: 20px;
       }
 
-      .status-section {
-        background-color: #161b22;
-        border: 1px solid #30363d;
+      .status-section, .export-options, .filter-section, .monitor-section {
+        background-color: var(--bg-secondary);
+        border: 1px solid var(--border);
         border-radius: 6px;
         padding: 12px;
-        margin-bottom: 15px;
+        margin-bottom: 12px;
+      }
+
+      .section-title {
+        font-weight: 600;
+        margin-bottom: 8px;
+        display: block;
+        font-size: 14px;
+        color: var(--text-primary);
       }
 
       .status-indicator {
@@ -44,28 +69,39 @@
         height: 8px;
         border-radius: 50%;
         margin-right: 8px;
+        background-color: var(--text-secondary);
       }
 
-      .status-dot.active {
-        background-color: #3fb950;
+      .status-dot.active { background-color: var(--green); }
+      .status-dot.inactive { background-color: var(--red); }
+      .status-dot.monitoring { background-color: var(--yellow); animation: pulse 1.5s infinite; }
+
+      @keyframes pulse {
+        0%, 100% { opacity: 1; }
+        50% { opacity: 0.4; }
       }
 
-      .status-dot.inactive {
-        background-color: #f85149;
+      .stats {
+        font-size: 12px;
+        color: var(--text-secondary);
+        margin-top: 5px;
       }
 
-      .export-options {
-        background-color: #161b22;
-        border: 1px solid #30363d;
-        border-radius: 6px;
-        padding: 12px;
-        margin-bottom: 15px;
-      }
-
-      .export-format {
+      .format-radio {
         display: flex;
-        gap: 10px;
+        gap: 15px;
         margin-bottom: 10px;
+      }
+
+      .format-radio label {
+        display: flex;
+        align-items: center;
+        cursor: pointer;
+        font-size: 14px;
+      }
+
+      .format-radio input[type="radio"] {
+        margin-right: 5px;
       }
 
       .checkbox-group {
@@ -79,10 +115,38 @@
         display: flex;
         align-items: center;
         font-size: 14px;
+        cursor: pointer;
       }
 
       .checkbox-group input[type="checkbox"] {
         margin-right: 8px;
+      }
+
+      .filter-row {
+        display: flex;
+        gap: 8px;
+        margin-bottom: 6px;
+      }
+
+      .filter-row input {
+        flex: 1;
+        background: var(--bg-primary);
+        border: 1px solid var(--border);
+        border-radius: 4px;
+        color: var(--text-primary);
+        padding: 4px 8px;
+        font-size: 13px;
+      }
+
+      .filter-row input:focus {
+        outline: 1px solid var(--accent);
+      }
+
+      .filter-row label {
+        font-size: 12px;
+        color: var(--text-secondary);
+        min-width: 55px;
+        padding-top: 5px;
       }
 
       .button {
@@ -98,74 +162,47 @@
         transition: background-color 0.2s;
       }
 
-      .button:hover:not(:disabled) {
-        background-color: #2ea043;
-      }
-
-      .button:disabled {
-        background-color: #21262d;
-        color: #8b949e;
-        cursor: not-allowed;
-      }
+      .button:hover:not(:disabled) { background-color: #2ea043; }
+      .button:disabled { background-color: #21262d; color: var(--text-secondary); cursor: not-allowed; }
 
       .button.secondary {
-        background-color: #21262d;
-        border: 1px solid #30363d;
-        margin-top: 10px;
+        background-color: var(--bg-secondary);
+        border: 1px solid var(--border);
+        margin-top: 8px;
       }
+      .button.secondary:hover:not(:disabled) { background-color: var(--border); }
 
-      .button.secondary:hover:not(:disabled) {
-        background-color: #30363d;
+      .button.danger {
+        background-color: #da3633;
       }
+      .button.danger:hover:not(:disabled) { background-color: #f85149; }
 
-      #message {
+      .button-row {
+        display: flex;
+        gap: 8px;
+        margin-top: 8px;
+      }
+      .button-row .button { width: auto; flex: 1; }
+
+      .message {
         padding: 10px;
         margin: 10px 0;
         border-radius: 6px;
         display: none;
         font-size: 14px;
       }
-
-      #success {
-        background-color: #1f6e3c;
-        border: 1px solid #3fb950;
-        color: #3fb950;
-      }
-
-      #error {
-        background-color: #5d1f1f;
-        border: 1px solid #f85149;
-        color: #f85149;
-      }
-
-      #warning {
-        background-color: #5d4e1f;
-        border: 1px solid #d29922;
-        color: #d29922;
-      }
-
-      .format-radio {
-        display: flex;
-        gap: 15px;
-      }
-
-      .format-radio label {
-        display: flex;
-        align-items: center;
-        cursor: pointer;
-      }
-
-      .format-radio input[type="radio"] {
-        margin-right: 5px;
-      }
+      .message.success { background-color: var(--green-bg); border: 1px solid var(--green); color: var(--green); }
+      .message.error   { background-color: var(--red-bg);   border: 1px solid var(--red);   color: var(--red);   }
+      .message.warning  { background-color: var(--yellow-bg); border: 1px solid var(--yellow); color: var(--yellow); }
+      .message.info     { background-color: #1f3a5e; border: 1px solid var(--accent); color: var(--accent); }
 
       .info-text {
         font-size: 12px;
-        color: #8b949e;
-        margin-top: 15px;
+        color: var(--text-secondary);
+        margin-top: 12px;
         padding: 10px;
-        background-color: #0d1117;
-        border-left: 3px solid #58a6ff;
+        background-color: var(--bg-primary);
+        border-left: 3px solid var(--accent);
       }
 
       .social-icons {
@@ -173,86 +210,150 @@
         justify-content: center;
         margin-top: 20px;
         padding-top: 15px;
-        border-top: 1px solid #30363d;
+        border-top: 1px solid var(--border);
       }
 
       .social-icons a {
-        display: inline-block;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
         margin: 0 10px;
-        color: #8b949e;
-        font-size: 20px;
+        color: var(--text-secondary);
         text-decoration: none;
         transition: color 0.2s;
       }
 
-      .social-icons a:hover {
-        color: #58a6ff;
+      .social-icons a:hover { color: var(--accent); }
+      .social-icons svg { width: 20px; height: 20px; fill: currentColor; }
+
+      .monitor-toggle {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
       }
 
-      .stats {
-        font-size: 12px;
-        color: #8b949e;
-        margin-top: 5px;
+      .toggle-switch {
+        position: relative;
+        width: 36px;
+        height: 20px;
+        cursor: pointer;
       }
+
+      .toggle-switch input { opacity: 0; width: 0; height: 0; }
+
+      .toggle-slider {
+        position: absolute;
+        top: 0; left: 0; right: 0; bottom: 0;
+        background-color: var(--border);
+        border-radius: 10px;
+        transition: 0.2s;
+      }
+
+      .toggle-slider::before {
+        content: "";
+        position: absolute;
+        height: 14px;
+        width: 14px;
+        left: 3px;
+        bottom: 3px;
+        background-color: var(--text-primary);
+        border-radius: 50%;
+        transition: 0.2s;
+      }
+
+      .toggle-switch input:checked + .toggle-slider { background-color: var(--green); }
+      .toggle-switch input:checked + .toggle-slider::before { transform: translateX(16px); }
     </style>
   </head>
   <body>
     <h1>DO Audit Log Scraper</h1>
-    <div class="version">Version 2.0 - Forensic Edition</div>
+    <div class="version">Version 2.1 — Forensic Edition</div>
 
+    <!-- Status -->
     <div class="status-section">
       <div class="status-indicator">
         <span class="status-dot" id="statusDot"></span>
-        <span id="statusText">Checking page...</span>
+        <span id="statusText">Checking page…</span>
       </div>
       <div class="stats" id="stats"></div>
     </div>
 
+    <!-- Export Options -->
     <div class="export-options">
-      <label style="font-weight: 600; margin-bottom: 8px; display: block;">Export Format:</label>
+      <span class="section-title">Export Format:</span>
       <div class="format-radio">
-        <label>
-          <input type="radio" name="format" value="csv" checked>
-          CSV
-        </label>
-        <label>
-          <input type="radio" name="format" value="json">
-          JSON
-        </label>
+        <label><input type="radio" name="format" value="csv" checked> CSV</label>
+        <label><input type="radio" name="format" value="json"> JSON</label>
       </div>
-      
+
       <div class="checkbox-group">
-        <label>
-          <input type="checkbox" id="includeMetadata" checked>
-          Include forensic metadata
-        </label>
-        <label>
-          <input type="checkbox" id="includeHash" checked>
-          Generate SHA-256 hash
-        </label>
-        <label>
-          <input type="checkbox" id="timestampFilename" checked>
-          Add timestamp to filename
-        </label>
+        <label><input type="checkbox" id="includeMetadata" checked> Include forensic metadata</label>
+        <label><input type="checkbox" id="includeHash" checked> Generate SHA-256 hash</label>
+        <label><input type="checkbox" id="timestampFilename" checked> Add timestamp to filename</label>
       </div>
     </div>
 
+    <!-- Filter -->
+    <div class="filter-section">
+      <span class="section-title">Filter (optional):</span>
+      <div class="filter-row">
+        <label for="filterUser">User</label>
+        <input type="text" id="filterUser" placeholder="e.g. John">
+      </div>
+      <div class="filter-row">
+        <label for="filterAction">Action</label>
+        <input type="text" id="filterAction" placeholder="e.g. login">
+      </div>
+      <div class="filter-row">
+        <label for="filterIP">IP</label>
+        <input type="text" id="filterIP" placeholder="e.g. 203.0.113">
+      </div>
+    </div>
+
+    <!-- Monitor -->
+    <div class="monitor-section">
+      <span class="section-title">Real-time Monitor:</span>
+      <div class="monitor-toggle">
+        <span style="font-size:13px;">Alert on new entries</span>
+        <label class="toggle-switch">
+          <input type="checkbox" id="monitorToggle">
+          <span class="toggle-slider"></span>
+        </label>
+      </div>
+      <div class="stats" id="monitorStatus"></div>
+    </div>
+
+    <!-- Buttons -->
     <button id="scrapeButton" class="button" disabled>Scrape Audit Logs</button>
     <button id="scrapeAllButton" class="button secondary" disabled>Scrape All Pages</button>
-    
-    <div id="message"></div>
-    
-    <div class="info-text">
-      <strong>Note:</strong> DigitalOcean still lacks API support for audit log export (as of 2025). This tool fills that gap for forensic investigations and compliance requirements.
+    <div class="button-row">
+      <button id="copyButton" class="button secondary" disabled>Copy to Clipboard</button>
+      <button id="filteredButton" class="button secondary" disabled>Export Filtered</button>
     </div>
 
-    <p style="text-align: center; margin-top: 15px; font-size: 13px;">Need forensic assistance?</p>
-    <div class="social-icons">
-      <a href="https://twitter.com/ionsec_io" class="fab fa-twitter" target="_blank"></a>
-      <a href="https://www.linkedin.com/company/ionsec" class="fab fa-linkedin" target="_blank"></a>
-      <a href="https://ionsec.io" class="fab fa-globe" target="_blank"></a>
+    <!-- Message -->
+    <div class="message" id="message"></div>
+
+    <div class="info-text">
+      <strong>Note:</strong> DigitalOcean still lacks API support for audit log export (as of 2025).
+      This tool fills that gap for forensic investigations and compliance requirements.
+      <br><br>
+      <strong>Shortcut:</strong> Press <kbd>Ctrl+Shift+S</kbd> to scrape the current page.
     </div>
-    
+
+    <p style="text-align:center; margin-top:15px; font-size:13px;">Need forensic assistance?</p>
+    <div class="social-icons">
+      <a href="https://twitter.com/ionsec_io" target="_blank" rel="noopener noreferrer" title="Twitter">
+        <svg viewBox="0 0 24 24"><path d="M22.46 6c-.77.35-1.6.58-2.46.69a4.3 4.3 0 001.88-2.38 8.59 8.59 0 01-2.72 1.04 4.28 4.28 0 00-7.32 3.91A12.15 12.15 0 013 4.79a4.28 4.28 0 001.32 5.72 4.24 4.24 0 01-1.94-.54v.05a4.28 4.28 0 003.43 4.19 4.27 4.27 0 01-1.93.07 4.29 4.29 0 004 2.98A8.6 8.6 0 012 18.58a12.13 12.13 0 006.56 1.92c7.88 0 12.2-6.53 12.2-12.2 0-.19 0-.37-.01-.56A8.72 8.72 0 0024 5.06a8.57 8.57 0 01-2.54.7z"/></svg>
+      </a>
+      <a href="https://www.linkedin.com/company/ionsec" target="_blank" rel="noopener noreferrer" title="LinkedIn">
+        <svg viewBox="0 0 24 24"><path d="M20.45 20.45h-3.55v-5.57c0-1.33-.02-3.04-1.85-3.04-1.85 0-2.14 1.45-2.14 2.94v5.67H9.36V9h3.41v1.56h.05c.48-.9 1.64-1.85 3.38-1.85 3.6 0 4.27 2.37 4.27 5.46v6.28zM5.34 7.43a2.06 2.06 0 11-.01-4.12 2.06 2.06 0 01.01 4.12zM7.12 20.45H3.56V9h3.56v11.45zM22.22 0H1.77C.79 0 0 .77 0 1.72v20.56C0 23.23.79 24 1.77 24h20.45c.98 0 1.78-.77 1.78-1.72V1.72C24 .77 23.2 0 22.22 0z"/></svg>
+      </a>
+      <a href="https://ionsec.io" target="_blank" rel="noopener noreferrer" title="Website">
+        <svg viewBox="0 0 24 24"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-1 17.93c-3.95-.49-7-3.85-7-7.93 0-.62.08-1.21.21-1.79L9 15v1c0 1.1.9 2 2 2v1.93zm6.9-2.54c-.26-.81-1-1.39-1.9-1.39h-1v-3c0-.55-.45-1-1-1H8v-2h2c.55 0 1-.45 1-1V7h2c1.1 0 2-.9 2-2v-.41A7.997 7.997 0 0120 12c0 2.08-.8 3.97-2.1 5.39z"/></svg>
+      </a>
+    </div>
+
     <script src="popup.js"></script>
   </body>
 </html>
