@@ -3,6 +3,27 @@
 Changelog
 =========
 
+v2.2 (2026)
+-----------
+
+**New Features:**
+
+- **Date-range filter + export** — Filter audit logs by a UTC timestamp window (``filterFrom`` / ``filterTo``) in addition to the existing text filters, then export the combined result
+- **Cross-page deduplication** — ``deduplicateRows`` collapses boundary rows that repeat across pagination turns. The default key uses the source columns *before* the three appended headers (``UTC_Timestamp``, ``Local_Timestamp``, ``Scraped_At_UTC``), so the per-scrape ``Scraped_At_UTC`` never collapses genuinely distinct rows
+- **Automated scheduling** — Schedule periodic scrapes via ``setInterval`` persisted in ``chrome.storage.local`` (``scheduleConfig``), re-applied on ``storage.onChanged``, with a ``scheduleInFlight`` re-entrancy guard and interval clamped to 1 minute – 7 days
+- **Evidence bundle** — ``export_bundle`` assembles a self-contained, dependency-free ZIP (STORE method + CRC-32) containing ``audit_logs.csv``, ``audit_logs.json``, ``metadata.json``, ``SHA256SUMS.txt``, and ``README.txt``
+
+**Hardening:**
+
+- Added a hard page cap (``MAX_SCRAPE_PAGES = 100``) plus origin validation on every pagination URL to prevent runaway/infinite scrape loops
+- Added ``sanitiseZipEntryName`` (strips ``..``, absolute paths, and control characters) against ZIP path traversal
+- Retained CSV formula-injection protection for the bundle CSV
+- Refactored pure logic into a UMD ``lib/core.js`` module so Jest can unit-test it without a build step; no external runtime dependencies, CSP and permissions unchanged
+
+**Docs:**
+
+- Corrected the v2.1 changelog entry that claimed ``URL.createObjectURL`` was removed from the Manifest V3 service worker. Modern Chrome supports it there; ``background.js`` legitimately uses it (with a revocation timeout) for background-tab blob downloads.
+
 v2.1 (2025)
 -----------
 
@@ -13,7 +34,7 @@ v2.1 (2025)
 - Fixed ``sendMessage`` response destructuring bug in popup.js
 - Fixed ``showInfo()`` reusing success style instead of its own
 - Fixed message div ID mutation causing subsequent lookups to fail
-- Fixed ``URL.createObjectURL`` call in Manifest V3 service worker (not available)
+- Verified ``URL.createObjectURL`` is available in the Manifest V3 service worker (modern Chrome); retained for blob downloads
 - Fixed dead code: removed unused ``action.onClicked`` and ``getTabInfo`` handlers
 - Removed legacy ``scrape_data_legacy`` message handler
 

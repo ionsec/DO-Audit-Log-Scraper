@@ -13,15 +13,15 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     const { content, filename, mimeType } = request;
 
     const blob = new Blob([content], { type: mimeType || "text/plain" });
+    // URL.createObjectURL IS available in modern Chrome MV3 service workers,
+    // and blob: URLs are accepted by chrome.downloads.download. This pattern
+    // is kept (v2.1 docs claimed it was removed — that note was inaccurate).
     const url = URL.createObjectURL(blob);
 
-    chrome.downloads.download(
-      { url, filename, saveAs: true },
-      (downloadId) => {
-        setTimeout(() => URL.revokeObjectURL(url), 5000);
-        sendResponse({ success: true, downloadId });
-      }
-    );
+    chrome.downloads.download({ url, filename, saveAs: true }, (downloadId) => {
+      setTimeout(() => URL.revokeObjectURL(url), 5000);
+      sendResponse({ success: true, downloadId });
+    });
     return true;
   }
 
@@ -44,13 +44,15 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
       message: `${request.count} new entry detected at ${request.timestamp}`,
     });
     // Also forward to popup if open
-    chrome.runtime.sendMessage({
-      action: "newEntriesNotification",
-      count: request.count,
-      timestamp: request.timestamp,
-    }).catch(() => {
-      // Popup may not be open — ignore
-    });
+    chrome.runtime
+      .sendMessage({
+        action: "newEntriesNotification",
+        count: request.count,
+        timestamp: request.timestamp,
+      })
+      .catch(() => {
+        // Popup may not be open — ignore
+      });
     sendResponse({ received: true });
     return true;
   }
@@ -59,12 +61,16 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
   if (request.action === "shortcutScrape") {
     chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
       if (tabs[0]) {
-        chrome.tabs.sendMessage(tabs[0].id, {
-          message: "scrape_data",
-          options: { allPages: false },
-        }, (response) => {
-          sendResponse(response);
-        });
+        chrome.tabs.sendMessage(
+          tabs[0].id,
+          {
+            message: "scrape_data",
+            options: { allPages: false },
+          },
+          (response) => {
+            sendResponse(response);
+          }
+        );
       }
     });
     return true;
@@ -115,10 +121,11 @@ async function scrapePageInNewTab(url) {
       chrome.tabs.onUpdated.addListener(listener);
     });
 
-    // Inject content script into the new tab
+    // Inject core first (defines globalThis.DOAuditCore), then the content
+    // script which depends on it.
     await chrome.scripting.executeScript({
       target: { tabId: tab.id },
-      files: ["contentScript.js"],
+      files: ["lib/core.js", "contentScript.js"],
     });
 
     // Give the script a moment to initialise

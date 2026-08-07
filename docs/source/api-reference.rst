@@ -110,6 +110,92 @@ Content Script (contentScript.js)
    :returns: Object with ``rowCount`` and ``hasNextPage`` properties
    :rtype: object
 
+Pure Logic Module (lib/core.js)
+-------------------------------
+
+Since v2.2, all DOM/chrome-free logic lives in ``lib/core.js``, a UMD module that
+defines ``globalThis.DOAuditCore`` when loaded as a script (listed before
+``contentScript.js`` in the manifest) and exports via CommonJS for Jest. It is
+intentionally free of ``document``, ``window``, and ``chrome.*`` references.
+
+.. js:function:: generateSHA256(data)
+
+   Computes a hex SHA-256 digest of ``data`` via ``crypto.subtle``.
+
+   :param any data: Value to hash
+   :returns: Hex digest string
+   :rtype: Promise<string>
+
+.. js:function:: sanitiseCSVCell(value)
+
+   Neutralizes CSV formula injection by tab-prefixing cells that start with ``=``, ``+``, ``-``, ``@``, tab, or carriage return.
+
+   :returns: Sanitised cell string
+
+.. js:function:: escapeCSV(value)
+
+   CSV-escapes a cell (quoting and doubling embedded quotes/newlines/commas) after sanitisation.
+
+   :returns: Escaped CSV cell string
+
+.. js:function:: filterAuditLogs(data, headers, filters)
+
+   Case-insensitive substring filter across the given column names.
+
+   :param array data: Row array
+   :param array headers: Column names
+   :param object filters: ``{ ColumnName: "needle" }``
+   :returns: Filtered rows
+
+.. js:function:: filterAuditLogsByDateRange(data, headers, options)
+
+   Filters rows to a UTC timestamp window by comparing the ``UTC_Timestamp`` column.
+
+   :param object options: ``{ from: string, to: string }`` (Date.parse-able)
+   :returns: Rows inside the window; unparseable rows excluded when a bound is set
+
+.. js:function:: deduplicateRows(data, headers, options)
+
+   Removes rows that repeat across pages. Default key = the source columns
+   *before* the 3 appended headers (``Scraped_At_UTC`` is excluded).
+
+   :param object options: ``{ enabled: bool, keyColumns?: string[] }``
+
+.. js:function:: nextUrlWithCap(currentUrl, visitedCount, options)
+
+   Returns a validated next-page URL, or ``null`` when the origin is not
+   allowed, the URL is malformed, or the page cap is reached.
+
+   :param object options: ``{ maxPages?: int, allowedOrigin?: string }``
+
+.. js:function:: validateScheduleMinutes(n)
+
+   Clamps an interval (minutes) to ``[1, 10080]`` (1 minute – 7 days).
+
+.. js:function:: crc32(bytes)
+
+   Table-based CRC-32 (IEEE 802.3); test vector ``0xCBF43926`` for ``"123456789"``.
+
+   :param Uint8Array bytes: Input
+   :returns: CRC-32 as unsigned int
+
+.. js:function:: sanitiseZipEntryName(name)
+
+   Strips ``..``, absolute paths, and control characters from a ZIP entry name to prevent path traversal.
+
+.. js:function:: buildZip(entries)
+
+   Dependency-free STORE (uncompressed) ZIP writer. Returns a ``Uint8Array``.
+
+   :param array entries: ``[{ name: string, data: Uint8Array|string }]``
+
+.. js:function:: buildEvidenceBundle(artifacts)
+
+   Assembles the five forensic artifacts (``README.txt``, ``audit_logs.csv``,
+   ``audit_logs.json``, ``metadata.json``, ``SHA256SUMS.txt``) into a ZIP.
+
+   :param object artifacts: ``{ baseName, csv, json, metadata, hash, readme }``
+
 Message Protocol
 ----------------
 
@@ -127,9 +213,15 @@ The content script listens for the following messages via ``chrome.runtime.onMes
    * - ``get_stats``
      - None
      - ``{ rowCount: int, hasNextPage: bool }``
-   * - ``scrape_data_legacy``
-     - None
-     - ``{ message: "data_scraped" | "error" }``
+   * - ``filter_data``
+     - ``{ filters: {...}, dateRange?: { from, to } }``
+     - ``{ success: bool, count: int, csv: string, data: array }``
+   * - ``update_schedule``
+     - None (reads persisted ``scheduleConfig``)
+     - ``{ success: bool, enabled: bool, intervalMinutes: int }``
+   * - ``export_bundle``
+     - ``{ options: {...} }``
+     - ``{ success: bool, count: int }``
 
 Background Service Worker (background.js)
 -----------------------------------------

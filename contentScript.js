@@ -1,38 +1,11 @@
-// DO Audit Log Scraper v2.1 — Forensic Edition
-// Rewritten: bug fixes, CSV injection protection, pagination via messaging,
-// MutationObserver monitoring, search/filter, clipboard, storage persistence
+// DO Audit Log Scraper v2.2 — Forensic Edition
+// Content script. Pure logic lives in lib/core.js (globalThis.DOAuditCore).
+// v2.2 adds: cross-page dedup, page-cap guard, date-range filter, automated
+// scheduling, and a self-contained .zip evidence bundle.
 
-const EXT_VERSION = "2.1";
+const EXT_VERSION = "2.2";
 const DO_SECURITY_ORIGIN = "https://cloud.digitalocean.com";
-
-// ─── SHA-256 Hash ────────────────────────────────────────────────────────
-async function generateSHA256(data) {
-  const encoder = new TextEncoder();
-  const dataBuffer = encoder.encode(data);
-  const hashBuffer = await crypto.subtle.digest("SHA-256", dataBuffer);
-  return Array.from(new Uint8Array(hashBuffer))
-    .map((b) => b.toString(16).padStart(2, "0"))
-    .join("");
-}
-
-// ─── CSV Sanitisation (formula-injection protection) ────────────────────
-function sanitiseCSVCell(value) {
-  if (value === null || value === undefined) return "";
-  const str = String(value);
-  // Prevent CSV formula injection: prefix dangerous chars with a tab
-  if (/^[=+\-@\t\r]/.test(str)) {
-    return "\t" + str;
-  }
-  return str;
-}
-
-function escapeCSV(value) {
-  const str = sanitiseCSVCell(value);
-  if (str.includes(",") || str.includes('"') || str.includes("\n")) {
-    return '"' + str.replace(/"/g, '""') + '"';
-  }
-  return str;
-}
+const Core = globalThis.DOAuditCore;
 
 // ─── Data Extraction ────────────────────────────────────────────────────
 function extractAuditLogData() {
@@ -74,13 +47,9 @@ function extractAuditLogData() {
           });
 
           const timeElement = row.querySelector(".created_at time, time");
-          const dateTime = timeElement
-            ? timeElement.getAttribute("datetime")
-            : "N/A";
+          const dateTime = timeElement ? timeElement.getAttribute("datetime") : "N/A";
 
-          const tooltipElement = row.querySelector(
-            "[data-original-title], [title]"
-          );
+          const tooltipElement = row.querySelector("[data-original-title], [title]");
           const localTime = tooltipElement
             ? tooltipElement.getAttribute("data-original-title") ||
               tooltipElement.getAttribute("title") ||
@@ -105,9 +74,8 @@ function extractAuditLogData() {
   }
 }
 
-// ─── Pagination (fixed: uses chrome messaging instead of page navigation) ─
+// ─── Pagination ─────────────────────────────────────────────────────────
 function getNextPageUrl() {
-  // Fixed: removed invalid jQuery :contains() pseudo-selector
   const selectors = [
     "a[rel='next']",
     ".pagination .next a",
@@ -118,7 +86,6 @@ function getNextPageUrl() {
     try {
       const el = document.querySelector(selector);
       if (el && !el.classList.contains("disabled") && el.href) {
-        // Validate URL is on the same origin
         try {
           const url = new URL(el.href, DO_SECURITY_ORIGIN);
           if (url.origin === DO_SECURITY_ORIGIN) {
@@ -129,11 +96,10 @@ function getNextPageUrl() {
         }
       }
     } catch {
-      // Selector may not match anything — continue
+      continue;
     }
   }
 
-  // Fallback: look for text-based "Next" links
   const links = document.querySelectorAll(".pagination a, nav a");
   for (const link of links) {
     if (
@@ -155,8 +121,8 @@ function getNextPageUrl() {
 
 // ─── CSV Formatting ─────────────────────────────────────────────────────
 function formatAsCSV(headers, data) {
-  const csvHeaders = headers.map(escapeCSV).join(",");
-  const csvRows = data.map((row) => row.map(escapeCSV).join(","));
+  const csvHeaders = headers.map(Core.escapeCSV).join(",");
+  const csvRows = data.map((row) => row.map(Core.escapeCSV).join(","));
   return [csvHeaders, ...csvRows].join("\n");
 }
 
@@ -181,6 +147,7 @@ async function createForensicMetadata(data, options) {
       includeHash: options.includeHash,
       timestampFilename: options.timestampFilename,
       allPages: options.allPages,
+      deduplicate: options.deduplicate,
     },
   };
 
@@ -188,7 +155,7 @@ async function createForensicMetadata(data, options) {
     const dataString = JSON.stringify(data);
     metadata.dataHash = {
       algorithm: "SHA-256",
-      value: await generateSHA256(dataString),
+      value: await Core.generateSHA256(dataString),
     };
   }
 
@@ -203,19 +170,8 @@ function generateFilename(format, includeTimestamp) {
   return `do_audit_logs${timestamp}.${format}`;
 }
 
-// ─── Download ───────────────────────────────────────────────────────────
-async function downloadData(data, filename, format) {
-  let content;
-  let mimeType;
-
-  if (format === "json") {
-    content = JSON.stringify(data, null, 2);
-    mimeType = "application/json";
-  } else {
-    content = data;
-    mimeType = "text/csv;charset=utf-8";
-  }
-
+// ─── Download helpers ───────────────────────────────────────────────────
+async function downloadBytes(content, filename, mimeType) {
   const blob = new Blob([content], { type: mimeType });
   const url = URL.createObjectURL(blob);
 
@@ -229,25 +185,43 @@ async function downloadData(data, filename, format) {
   setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
 
-// ─── Pagination via background messaging (replaces broken navigateToPage) ─
-// Instead of navigating the content script page (which destroys the context),
-// we ask the background worker to create a new temporary tab, inject the
-// content script there, scrape, and return data.
+function downloadData(data, filename, format) {
+  let content;
+  let mimeType;
 
+  if (format === "json") {
+    content = JSON.stringify(data, null, 2);
+    mimeType = "application/json";
+  } else {
+    content = data;
+    mimeType = "text/csv;charset=utf-8";
+  }
+
+  return downloadBytes(content, filename, mimeType);
+}
+
+// ─── Pagination via background messaging ───────────────────────────────
+// Origin-validated and capped at Core.MAX_SCRAPE_PAGES to prevent runaway
+// scraping if pagination ever fails to terminate.
 async function scrapeAllPages(options, firstPageData) {
-  let nextUrl = getNextPageUrl();
-  if (!nextUrl) {
+  const nextUrl = getNextPageUrl();
+  const guard = (url, count) =>
+    Core.nextUrlWithCap(url, count, {
+      maxPages: Core.MAX_SCRAPE_PAGES,
+      allowedOrigin: DO_SECURITY_ORIGIN,
+    });
+
+  let currentUrl = guard(nextUrl, 1);
+  if (!currentUrl) {
     return { data: firstPageData.data, headers: firstPageData.headers, pages: 1 };
   }
 
   let allData = [...firstPageData.data];
   const headers = firstPageData.headers;
   let pages = 1;
-  let currentUrl = nextUrl;
 
   while (currentUrl) {
     pages++;
-    // Ask background to open the URL in a hidden tab, inject script, and return data
     const result = await chrome.runtime.sendMessage({
       action: "scrapePageInTab",
       url: currentUrl,
@@ -257,8 +231,13 @@ async function scrapeAllPages(options, firstPageData) {
       allData.push(...result.data);
     }
 
-    // Get next URL from the scraped page (background returns it)
-    currentUrl = result ? result.nextUrl : null;
+    const nextFromPage = result ? result.nextUrl : null;
+    currentUrl = guard(nextFromPage, pages);
+  }
+
+  // Cross-page deduplication (boundary rows repeat across page turns).
+  if (options.deduplicate !== false) {
+    allData = Core.deduplicateRows(allData, headers, { enabled: true });
   }
 
   return { data: allData, headers, pages };
@@ -272,9 +251,9 @@ async function scrapeData(options = {}) {
     const {
       format = "csv",
       includeMetadata = true,
-      includeHash = true,
       timestampFilename = true,
       allPages = false,
+      deduplicate = true,
     } = options;
 
     // Load persisted defaults for any undefined options
@@ -287,6 +266,7 @@ async function scrapeData(options = {}) {
       includeHash: options.includeHash ?? defaults.includeHash ?? true,
       timestampFilename: options.timestampFilename ?? defaults.timestampFilename ?? true,
       allPages,
+      deduplicate,
     };
 
     const pageData = extractAuditLogData();
@@ -305,9 +285,7 @@ async function scrapeData(options = {}) {
       pageCount = paginated.pages;
     }
 
-    console.log(
-      `Scraped ${allData.length} total entries from ${pageCount} page(s)`
-    );
+    console.log(`Scraped ${allData.length} total entries from ${pageCount} page(s)`);
 
     const filename = generateFilename(format, timestampFilename);
     let exportData;
@@ -334,7 +312,6 @@ async function scrapeData(options = {}) {
       exportData = formatAsCSV(allHeaders, allData);
       if (includeMetadata) {
         const metadata = await createForensicMetadata(allData, resolvedOptions);
-        // Standard CSV comment — metadata on separate lines, no embedded JSON
         const metadataLines = [
           "# Forensic Metadata",
           `# Tool: ${metadata.tool} v${metadata.version}`,
@@ -355,7 +332,6 @@ async function scrapeData(options = {}) {
       }
     }
 
-    // Add BOM for proper UTF-8 handling in Excel
     if (format === "csv") {
       exportData = "\uFEFF" + exportData;
     }
@@ -369,39 +345,131 @@ async function scrapeData(options = {}) {
   }
 }
 
-// ─── Search / Filter ───────────────────────────────────────────────────
-function filterAuditLogs(data, headers, filters) {
-  if (!filters || Object.keys(filters).length === 0) return data;
-
-  return data.filter((row) => {
-    return Object.entries(filters).every(([key, value]) => {
-      const colIndex = headers.indexOf(key);
-      if (colIndex === -1) return true;
-      if (!value) return true;
-      const cellValue = String(row[colIndex]).toLowerCase();
-      return cellValue.includes(String(value).toLowerCase());
-    });
-  });
-}
-
-// ─── Clipboard Copy ────────────────────────────────────────────────────
-async function copyToClipboard(text) {
+// ─── Evidence Bundle (.zip) ─────────────────────────────────────────────
+async function exportEvidenceBundle(options = {}) {
   try {
-    await navigator.clipboard.writeText(text);
-    return true;
-  } catch {
-    // Fallback for older browsers
-    const textarea = document.createElement("textarea");
-    textarea.value = text;
-    textarea.style.position = "fixed";
-    textarea.style.left = "-9999px";
-    document.body.appendChild(textarea);
-    textarea.select();
-    const result = document.execCommand("copy");
-    document.body.removeChild(textarea);
-    return result;
+    const {
+      allPages = false,
+      includeMetadata = true,
+      includeHash = true,
+      deduplicate = true,
+    } = options;
+
+    const pageData = extractAuditLogData();
+    if (!pageData) throw new Error("Failed to extract audit log data");
+
+    let allHeaders = pageData.headers;
+    let allData = pageData.data;
+    let pages = 1;
+
+    if (allPages) {
+      const paginated = await scrapeAllPages(options, pageData);
+      allData = paginated.data;
+      allHeaders = paginated.headers;
+      pages = paginated.pages;
+    } else if (deduplicate) {
+      allData = Core.deduplicateRows(allData, allHeaders, { enabled: true });
+    }
+
+    const csv = formatAsCSV(allHeaders, allData);
+    const jsonRows = allData.map((row) => {
+      const obj = {};
+      allHeaders.forEach((header, index) => {
+        obj[header] = row[index];
+      });
+      return obj;
+    });
+    const json = JSON.stringify({ auditLogs: jsonRows }, null, 2);
+
+    const metadata = await createForensicMetadata(jsonRows, options);
+    const baseName = `do_audit_log_evidence_${new Date()
+      .toISOString()
+      .replace(/[:.]/g, "-")
+      .slice(0, -5)}`;
+
+    const readme = [
+      "DO Audit Log Scraper — Forensic Evidence Bundle",
+      `Exported: ${metadata.exportedAt}`,
+      `Tool: ${metadata.tool} v${metadata.version}`,
+      `Source: ${metadata.source}`,
+      `Pages: ${pages}, Records: ${allData.length}`,
+      "Verify file integrity against SHA256SUMS.txt before sharing.",
+    ].join("\n");
+
+    let hashManifest = "";
+    if (includeHash) {
+      const csvHash = await Core.generateSHA256(csv);
+      const jsonHash = await Core.generateSHA256(json);
+      hashManifest = [
+        "# SHA-256 integrity manifest",
+        `${csvHash}  audit_logs.csv`,
+        `${jsonHash}  audit_logs.json`,
+        "",
+      ].join("\n");
+    }
+
+    const zipBytes = Core.buildEvidenceBundle({
+      baseName,
+      csv,
+      json,
+      metadata: includeMetadata ? JSON.stringify(metadata, null, 2) : "{}",
+      hash: hashManifest,
+      readme,
+    });
+
+    await downloadBytes(zipBytes, `${baseName}.zip`, "application/zip");
+    return { success: true, count: allData.length, pages };
+  } catch (error) {
+    console.error("Bundle error:", error);
+    return { success: false, error: error.message };
   }
 }
+
+// ─── Automated Scheduling ───────────────────────────────────────────────
+let scheduleTimer = null;
+let scheduleInFlight = false;
+
+function stopSchedule() {
+  if (scheduleTimer) {
+    clearInterval(scheduleTimer);
+    scheduleTimer = null;
+  }
+}
+
+async function applySchedule() {
+  const stored = await chrome.storage.local.get("scheduleConfig").catch(() => ({}));
+  const cfg = stored.scheduleConfig;
+  stopSchedule();
+
+  if (cfg && cfg.enabled) {
+    const minutes = Core.validateScheduleMinutes(cfg.intervalMinutes || 0);
+    const ms = minutes * 60 * 1000;
+    scheduleTimer = setInterval(async () => {
+      if (scheduleInFlight) return; // re-entrancy guard: skip overlapping ticks
+      scheduleInFlight = true;
+      try {
+        const opts = {
+          format: cfg.format || "csv",
+          includeMetadata: cfg.includeMetadata !== false,
+          includeHash: cfg.includeHash !== false,
+          timestampFilename: cfg.timestampFilename !== false,
+          allPages: !!cfg.allPages,
+          deduplicate: cfg.deduplicate !== false,
+        };
+        await scrapeData(opts);
+      } finally {
+        scheduleInFlight = false;
+      }
+    }, ms);
+  }
+}
+
+// React to schedule changes made by the popup (or externally).
+chrome.storage.onChanged.addListener((changes, area) => {
+  if (area === "local" && changes.scheduleConfig) {
+    applySchedule();
+  }
+});
 
 // ─── MutationObserver — real-time monitoring ────────────────────────────
 let observer = null;
@@ -413,7 +481,7 @@ function startMonitoring() {
 
   lastRowCount = table.querySelectorAll("tr").length;
 
-  observer = new MutationObserver((mutations) => {
+  observer = new MutationObserver((_mutations) => {
     const currentCount = table.querySelectorAll("tr").length;
     if (currentCount > lastRowCount) {
       const newEntries = currentCount - lastRowCount;
@@ -480,13 +548,25 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
   if (request.message === "filter_data") {
     const pageData = extractAuditLogData();
     if (pageData) {
-      const filtered = filterAuditLogs(
+      let filtered = Core.filterAuditLogs(
         pageData.data,
         pageData.headers,
-        request.filters
+        request.filters || {}
       );
+      if (request.dateRange) {
+        filtered = Core.filterAuditLogsByDateRange(
+          filtered,
+          pageData.headers,
+          request.dateRange
+        );
+      }
       const csv = formatAsCSV(pageData.headers, filtered);
-      sendResponse({ success: true, data: filtered, count: filtered.length, csv });
+      sendResponse({
+        success: true,
+        data: filtered,
+        count: filtered.length,
+        csv,
+      });
     } else {
       sendResponse({ success: false, error: "No data found" });
     }
@@ -505,6 +585,16 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     return true;
   }
 
+  if (request.message === "update_schedule") {
+    applySchedule().then(() => sendResponse({ success: true }));
+    return true;
+  }
+
+  if (request.message === "export_bundle") {
+    exportEvidenceBundle(request.options || {}).then(sendResponse);
+    return true;
+  }
+
   // Called from background when scraping a tab for pagination
   if (request.message === "extract_for_pagination") {
     const pageData = extractAuditLogData();
@@ -514,12 +604,29 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
   }
 });
 
+// ─── Clipboard Copy ────────────────────────────────────────────────────
+async function copyToClipboard(text) {
+  try {
+    await navigator.clipboard.writeText(text);
+    return true;
+  } catch {
+    const textarea = document.createElement("textarea");
+    textarea.value = text;
+    textarea.style.position = "fixed";
+    textarea.style.left = "-9999px";
+    document.body.appendChild(textarea);
+    textarea.select();
+    const result = document.execCommand("copy");
+    document.body.removeChild(textarea);
+    return result;
+  }
+}
+
 // ─── Init ──────────────────────────────────────────────────────────────
 console.log(`DO Audit Log Scraper v${EXT_VERSION} content script loaded`);
 
 if (window.location.href.includes("cloud.digitalocean.com/account/security")) {
   console.log("Audit log page detected — extension ready");
-  // Auto-start monitoring
   startMonitoring();
+  applySchedule();
 }
-CONTENT

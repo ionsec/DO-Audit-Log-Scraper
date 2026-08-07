@@ -25,3 +25,8 @@ Thumbs.db
 
 # Claude settings (local only)
 .claude/
+
+# Test artifacts
+test-results/
+playwright-report/
+coverage/
