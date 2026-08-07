@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "DO Audit Log Scraper",
-  "version": "2.1",
+  "version": "2.2",
   "description": "Scrape and export DigitalOcean audit logs for forensic analysis and DFIR purposes",
   "permissions": [
     "activeTab",
@@ -16,7 +16,7 @@
   "content_scripts": [
     {
       "matches": ["https://cloud.digitalocean.com/account/security*"],
-      "js": ["contentScript.js"],
+      "js": ["lib/core.js", "contentScript.js"],
       "run_at": "document_idle"
     }
   ],

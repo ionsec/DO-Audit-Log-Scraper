@@ -1,0 +1,51 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <title>DigitalOcean — Security — Audit Logs (mock fixture)</title>
+  </head>
+  <body>
+    <div class="audit-log">
+      <table>
+        <thead>
+          <tr>
+            <th>Action</th>
+            <th>User</th>
+            <th>IP Address</th>
+            <th>Time</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>login</td>
+            <td><a href="/account/profile">Alice Smith</a></td>
+            <td>203.0.113.1</td>
+            <td class="created_at">
+              <time datetime="2025-06-01T10:00:00Z" data-original-title="June 1, 2025 06:00 AM EDT">1 minute ago</time>
+            </td>
+          </tr>
+          <tr>
+            <td>delete_droplet</td>
+            <td><a href="/account/profile">Bob Jones</a></td>
+            <td>198.51.100.2</td>
+            <td class="created_at">
+              <time datetime="2025-06-02T11:30:00Z" data-original-title="June 2, 2025 07:30 AM EDT">2 minutes ago</time>
+            </td>
+          </tr>
+          <tr>
+            <td>create_droplet</td>
+            <td><a href="/account/profile">Alice Smith</a></td>
+            <td>203.0.113.1</td>
+            <td class="created_at">
+              <time datetime="2025-06-05T09:15:00Z" data-original-title="June 5, 2025 05:15 AM EDT">3 minutes ago</time>
+            </td>
+          </tr>
+        </tbody>
+      </table>
+
+      <nav class="pagination">
+        <a rel="next" href="https://cloud.digitalocean.com/account/security?page=2">Next</a>
+      </nav>
+    </div>
+  </body>
+</html>
